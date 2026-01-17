@@ -15,7 +15,7 @@ from PyQt5.QtGui import (
     QStandardItemModel,
 )
 
-from src.credentials_generator import generate_credentials
+from credentials_generator import generate_credentials
 
 
 class PingWorker(QThread):
@@ -25,7 +25,8 @@ class PingWorker(QThread):
     def __init__(self, host_infos, cmd, parent=None, max_threads=30):
         super().__init__(parent)
         self.host_infos = host_infos  # list of dicts: {hostname, username, password}
-        self.cmd = cmd
+        # Split commands by '&&', strip whitespace, ignore empty
+        self.cmds = [c.strip() for c in cmd.split('&&') if c.strip()]
         self.max_threads = max_threads
         self._is_running = True
 
@@ -50,14 +51,17 @@ class PingWorker(QThread):
                     ssh = paramiko.SSHClient()
                     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                     ssh.connect(host, username=username, password=password, timeout=5)
-                    stdin, stdout, stderr = ssh.exec_command(self.cmd)
-                    cmd_out = stdout.read().decode(errors='replace').strip()
-                    cmd_err = stderr.read().decode(errors='replace').strip()
+                    results = []
+                    for cmd in self.cmds:
+                        stdin, stdout, stderr = ssh.exec_command(cmd)
+                        cmd_out = stdout.read().decode(errors='replace').strip()
+                        cmd_err = stderr.read().decode(errors='replace').strip()
+                        if cmd_err:
+                            results.append(f'ERR: {cmd_err}')
+                        else:
+                            results.append(cmd_out)
                     ssh.close()
-                    if cmd_err:
-                        row['cmd_result'] = f'ERR: {cmd_err}'
-                    else:
-                        row['cmd_result'] = cmd_out
+                    row['cmd_result'] = '\n'.join(results)
                 except Exception as e:
                     row['cmd_result'] = f'SSH ERR: {e}'
             else:
