@@ -20,6 +20,25 @@ def ssh_copy(hostname, username, password, local_path, remote_path):
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         ssh.connect(hostname, username=username, password=password, timeout=10)
         sftp = ssh.open_sftp()
+        
+        # Ensure remote path exists
+        def ensure_remote_dir(path):
+            dirs = []
+            while path and path != '/':
+                dirs.append(path)
+                path = os.path.dirname(path)
+            dirs.reverse()
+            for d in dirs:
+                try:
+                    sftp.stat(d)
+                except IOError:
+                    try:
+                        sftp.mkdir(d)
+                    except IOError:
+                        pass  # May fail if parent doesn't exist, will retry
+        
+        ensure_remote_dir(remote_path)
+        
         if os.path.isfile(local_path):
             # Copy single file
             remote_file = os.path.join(remote_path, os.path.basename(local_path))
