@@ -19,6 +19,97 @@ from credentials_generator import generate_credentials
 from ssh_copy import ssh_copy
 
 
+class ExecutionWorker(QThread):
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(list)
+
+    def __init__(self, host_infos, do_builtin, do_custom, local_path, remote_path, custom_cmd, parent=None):
+        super().__init__(parent)
+        self.host_infos = host_infos
+        self.do_builtin = do_builtin
+        self.do_custom = do_custom
+        self.local_path = local_path
+        self.remote_path = remote_path
+        self.custom_cmd = custom_cmd
+
+    def run(self):
+        from ping_utils import ping_host
+        results = [None] * len(self.host_infos)
+
+        def worker(idx, info):
+            host = info['hostname']
+            username = info['username']
+            password = info['password']
+            row = {'hostname': host, 'pingable': False, 'cmd_result': ''}
+            
+            # Step 1: Always ping first
+            try:
+                pingable = ping_host(host)
+            except Exception:
+                pingable = False
+            
+            row['pingable'] = pingable
+            if not pingable:
+                row['cmd_result'] = 'Unreachable'
+                return idx, row
+            
+            # Step 2: Execute built-in command (copy) if requested
+            copy_result = None
+            if self.do_builtin:
+                try:
+                    copy_result = ssh_copy(host, username, password, self.local_path, self.remote_path)
+                except Exception as e:
+                    copy_result = f'Copy failed: {e}'
+            
+            # Step 3: Execute custom command if requested
+            custom_result = None
+            if self.do_custom:
+                ssh = None
+                try:
+                    ssh = paramiko.SSHClient()
+                    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                    ssh.connect(host, username=username, password=password, timeout=5)
+                    cmds = [c.strip() for c in self.custom_cmd.split('&&') if c.strip()]
+                    cmd_results = []
+                    for cmd in cmds:
+                        stdin, stdout, stderr = ssh.exec_command(cmd)
+                        cmd_out = stdout.read().decode(errors='replace').strip()
+                        cmd_err = stderr.read().decode(errors='replace').strip()
+                        if cmd_err:
+                            cmd_results.append(f'ERR: {cmd_err}')
+                        else:
+                            cmd_results.append(cmd_out)
+                    custom_result = '\n'.join(cmd_results)
+                except Exception as e:
+                    custom_result = f'SSH ERR: {e}'
+                finally:
+                    if ssh is not None:
+                        try:
+                            ssh.close()
+                        except Exception:
+                            pass
+            
+            # Combine results based on mode
+            if self.do_builtin and self.do_custom:
+                row['cmd_result'] = f'{copy_result}\n---\n{custom_result}'
+            elif self.do_builtin:
+                row['cmd_result'] = copy_result
+            elif self.do_custom:
+                row['cmd_result'] = custom_result
+            
+            return idx, row
+
+        # Run all workers in parallel with ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            futures = [executor.submit(worker, idx, info) for idx, info in enumerate(self.host_infos)]
+            for i, future in enumerate(as_completed(futures), 1):
+                idx, row = future.result()
+                results[idx] = row
+                self.progress.emit(i)
+
+        self.finished.emit(results)
+
+
 def setup_validators(window):
 	# Only allow integers in range_from and range_to
 	int_validator = QIntValidator()
@@ -189,98 +280,32 @@ def handle_execute(window):
         window.progressBar.setMaximum(len(host_infos))
         window.progressBar.setValue(0)
 
-        from ping_utils import ping_host
-        results = [None] * len(host_infos)
+        # Create and start the execution worker thread
+        def update_progress(val):
+            window.progressBar.setValue(val)
 
-        # Worker function for each host - handles all 3 modes
-        def worker(idx, info):
-            host = info['hostname']
-            username = info['username']
-            password = info['password']
-            row = {'hostname': host, 'pingable': False, 'cmd_result': ''}
-            
-            # Step 1: Always ping first
-            try:
-                pingable = ping_host(host)
-            except Exception:
-                pingable = False
-            
-            row['pingable'] = pingable
-            if not pingable:
-                row['cmd_result'] = 'Unreachable'
-                return idx, row
-            
-            # Step 2: Execute built-in command (copy) if requested
-            copy_result = None
-            if do_builtin:
-                try:
-                    copy_result = ssh_copy(host, username, password, local_path, remote_path)
-                except Exception as e:
-                    copy_result = f'Copy failed: {e}'
-            
-            # Step 3: Execute custom command if requested
-            custom_result = None
-            if do_custom:
-                ssh = None
-                try:
-                    ssh = paramiko.SSHClient()
-                    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-                    ssh.connect(host, username=username, password=password, timeout=5)
-                    cmds = [c.strip() for c in custom_cmd.split('&&') if c.strip()]
-                    cmd_results = []
-                    for cmd in cmds:
-                        stdin, stdout, stderr = ssh.exec_command(cmd)
-                        cmd_out = stdout.read().decode(errors='replace').strip()
-                        cmd_err = stderr.read().decode(errors='replace').strip()
-                        if cmd_err:
-                            cmd_results.append(f'ERR: {cmd_err}')
-                        else:
-                            cmd_results.append(cmd_out)
-                    custom_result = '\n'.join(cmd_results)
-                except Exception as e:
-                    custom_result = f'SSH ERR: {e}'
-                finally:
-                    if ssh is not None:
-                        try:
-                            ssh.close()
-                        except Exception:
-                            pass
-            
-            # Combine results based on mode
-            if do_builtin and do_custom:
-                row['cmd_result'] = f'{copy_result}\n---\n{custom_result}'
-            elif do_builtin:
-                row['cmd_result'] = copy_result
-            elif do_custom:
-                row['cmd_result'] = custom_result
-            
-            return idx, row
+        def on_finished(results):
+            # Display results in result_table
+            df = pd.DataFrame(results)
+            df = df.sort_values(by=['pingable', 'hostname'], ascending=[False, True])
+            model = QStandardItemModel()
+            model.setHorizontalHeaderLabels(['hostname', 'pingable', 'cmd_result'])
+            for _, row in df.iterrows():
+                hostname_item = QStandardItem(str(row['hostname']))
+                pingable_item = QStandardItem('Yes' if row['pingable'] else 'No')
+                cmd_result_item = QStandardItem(str(row['cmd_result']))
+                model.appendRow([hostname_item, pingable_item, cmd_result_item])
+            window.result_table.setModel(model)
+            header = window.result_table.horizontalHeader()
+            header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
+            header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
+            header.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
+            window.progressBar.setValue(len(host_infos))
 
-        # Run all workers in parallel with ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=30) as executor:
-            futures = [executor.submit(worker, idx, info) for idx, info in enumerate(host_infos)]
-            for i, future in enumerate(as_completed(futures), 1):
-                idx, row = future.result()
-                results[idx] = row
-                window.progressBar.setValue(i)
-
-        # Display results in result_table
-        df = pd.DataFrame(results)
-        df = df.sort_values(by=['pingable', 'hostname'], ascending=[False, True])
-        model = QStandardItemModel()
-        model.setHorizontalHeaderLabels(['hostname', 'pingable', 'cmd_result'])
-        for _, row in df.iterrows():
-            hostname_item = QStandardItem(str(row['hostname']))
-            pingable_item = QStandardItem('Yes' if row['pingable'] else 'No')
-            cmd_result_item = QStandardItem(str(row['cmd_result']))
-            model.appendRow([hostname_item, pingable_item, cmd_result_item])
-        window.result_table.setModel(model)
-        header = window.result_table.horizontalHeader()
-        header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
-        window.progressBar.setValue(len(host_infos))
-        return
+        window.execution_worker = ExecutionWorker(host_infos, do_builtin, do_custom, local_path, remote_path, custom_cmd)
+        window.execution_worker.progress.connect(update_progress)
+        window.execution_worker.finished.connect(on_finished)
+        window.execution_worker.start()
 
     window.execute.clicked.connect(on_execute)
 
