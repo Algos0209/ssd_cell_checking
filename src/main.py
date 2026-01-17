@@ -33,6 +33,8 @@ class ExecutionWorker(QThread):
         self.custom_cmd = custom_cmd
 
     def run(self):
+        print(f"[LOG] ExecutionWorker started for {len(self.host_infos)} hosts")
+        print(f"[LOG] Mode - Builtin: {self.do_builtin}, Custom: {self.do_custom}")
         from ping_utils import ping_host
         results = [None] * len(self.host_infos)
 
@@ -41,37 +43,48 @@ class ExecutionWorker(QThread):
             username = info['username']
             password = info['password']
             row = {'hostname': host, 'pingable': False, 'cmd_result': ''}
+            print(f"[LOG] [{idx+1}/{len(self.host_infos)}] Starting worker for {host}")
             
             # Step 1: Always ping first
+            print(f"[LOG] [{idx+1}] Pinging {host}...")
             try:
                 pingable = ping_host(host)
-            except Exception:
+                print(f"[LOG] [{idx+1}] {host} pingable: {pingable}")
+            except Exception as e:
+                print(f"[LOG] [{idx+1}] Ping failed for {host}: {e}")
                 pingable = False
             
             row['pingable'] = pingable
             if not pingable:
                 row['cmd_result'] = 'Unreachable'
+                print(f"[LOG] [{idx+1}] {host} unreachable, skipping")
                 return idx, row
             
             # Step 2: Execute built-in command (copy) if requested
             copy_result = None
             if self.do_builtin:
+                print(f"[LOG] [{idx+1}] Starting copy for {host} from '{self.local_path}' to '{self.remote_path}'")
                 try:
                     copy_result = ssh_copy(host, username, password, self.local_path, self.remote_path)
+                    print(f"[LOG] [{idx+1}] Copy completed for {host}: {copy_result}")
                 except Exception as e:
                     copy_result = f'Copy failed: {e}'
+                    print(f"[LOG] [{idx+1}] Copy exception for {host}: {e}")
             
             # Step 3: Execute custom command if requested
             custom_result = None
             if self.do_custom:
+                print(f"[LOG] [{idx+1}] Executing custom command for {host}")
                 ssh = None
                 try:
                     ssh = paramiko.SSHClient()
                     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                     ssh.connect(host, username=username, password=password, timeout=5)
+                    print(f"[LOG] [{idx+1}] SSH connected to {host}")
                     cmds = [c.strip() for c in self.custom_cmd.split('&&') if c.strip()]
                     cmd_results = []
                     for cmd in cmds:
+                        print(f"[LOG] [{idx+1}] Running command on {host}: {cmd}")
                         stdin, stdout, stderr = ssh.exec_command(cmd)
                         cmd_out = stdout.read().decode(errors='replace').strip()
                         cmd_err = stderr.read().decode(errors='replace').strip()
@@ -80,8 +93,10 @@ class ExecutionWorker(QThread):
                         else:
                             cmd_results.append(cmd_out)
                     custom_result = '\n'.join(cmd_results)
+                    print(f"[LOG] [{idx+1}] Custom command completed for {host}")
                 except Exception as e:
                     custom_result = f'SSH ERR: {e}'
+                    print(f"[LOG] [{idx+1}] SSH exception for {host}: {e}")
                 finally:
                     if ssh is not None:
                         try:
@@ -97,16 +112,21 @@ class ExecutionWorker(QThread):
             elif self.do_custom:
                 row['cmd_result'] = custom_result
             
+            print(f"[LOG] [{idx+1}] Worker completed for {host}")
             return idx, row
 
         # Run all workers in parallel with ThreadPoolExecutor
+        print(f"[LOG] Starting ThreadPoolExecutor with 30 workers")
         with ThreadPoolExecutor(max_workers=30) as executor:
             futures = [executor.submit(worker, idx, info) for idx, info in enumerate(self.host_infos)]
+            print(f"[LOG] Submitted {len(futures)} tasks to executor")
             for i, future in enumerate(as_completed(futures), 1):
                 idx, row = future.result()
                 results[idx] = row
+                print(f"[LOG] Progress: {i}/{len(self.host_infos)} completed")
                 self.progress.emit(i)
 
+        print(f"[LOG] All workers completed, emitting finished signal")
         self.finished.emit(results)
 
 
@@ -211,12 +231,14 @@ def handle_execute(window):
                 field.clear()
 
     def on_execute():
+        print("[LOG] Execute button clicked")
         # Clear the result table immediately
         empty_model = QStandardItemModel()
         empty_model.setHorizontalHeaderLabels(['hostname', 'pingable', 'cmd_result'])
         window.result_table.setModel(empty_model)
         host_infos = []
         if window.range_radio.isChecked():
+            print("[LOG] Range radio selected")
             from_text = window.range_from.text().strip()
             to_text = window.range_to.text().strip()
             clear = []
@@ -282,9 +304,11 @@ def handle_execute(window):
 
         # Create and start the execution worker thread
         def update_progress(val):
+            print(f"[LOG] Progress update: {val}/{len(host_infos)}")
             window.progressBar.setValue(val)
 
         def on_finished(results):
+            print(f"[LOG] Execution finished, displaying {len(results)} results")
             # Display results in result_table
             df = pd.DataFrame(results)
             df = df.sort_values(by=['pingable', 'hostname'], ascending=[False, True])
@@ -301,11 +325,15 @@ def handle_execute(window):
             header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
             header.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
             window.progressBar.setValue(len(host_infos))
+            print("[LOG] Results displayed in table")
 
+        print(f"[LOG] Creating ExecutionWorker with {len(host_infos)} hosts")
         window.execution_worker = ExecutionWorker(host_infos, do_builtin, do_custom, local_path, remote_path, custom_cmd)
         window.execution_worker.progress.connect(update_progress)
         window.execution_worker.finished.connect(on_finished)
+        print("[LOG] Starting ExecutionWorker thread")
         window.execution_worker.start()
+        print("[LOG] ExecutionWorker thread started, returning from on_execute")
 
     window.execute.clicked.connect(on_execute)
 
