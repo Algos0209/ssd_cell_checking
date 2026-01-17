@@ -220,6 +220,11 @@ def handle_execute(window):
                 cmd_result_item = QStandardItem(str(row['cmd_result']))
                 model.appendRow([hostname_item, pingable_item, cmd_result_item])
             window.result_table.setModel(model)
+            # Expand columns to fill the view
+            header = window.result_table.horizontalHeader()
+            header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)  # hostname
+            header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)  # pingable
+            header.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)  # cmd_result
             window.progressBar.setValue(len(host_infos))
 
         window.ping_worker = PingWorker(host_infos, cmd)
@@ -234,7 +239,7 @@ def main():
     window = uic.loadUi("ui.ui")
     # Set up result_table with headers so they are always visible
     empty_model = QStandardItemModel()
-    empty_model.setHorizontalHeaderLabels(['hostname', 'pingable'])
+    empty_model.setHorizontalHeaderLabels(['hostname', 'pingable', 'cmd_result'])
     window.result_table.setModel(empty_model)
     setup_validators(window)
     handle_radio_buttons(window)
