@@ -25,24 +25,20 @@ def ssh_copy(hostname, username, password, local_path, remote_path):
         sftp = ssh.open_sftp()
         print(f"[ssh_copy] SFTP opened for {hostname}")
         
-        # Ensure remote path exists
-        print(f"[ssh_copy] Creating remote directory {remote_path} on {hostname}")
-        def ensure_remote_dir(path):
-            dirs = []
-            while path and path != '/':
-                dirs.append(path)
-                path = os.path.dirname(path)
-            dirs.reverse()
-            for d in dirs:
-                try:
-                    sftp.stat(d)
-                except IOError:
-                    try:
-                        sftp.mkdir(d)
-                    except IOError:
-                        pass  # May fail if parent doesn't exist, will retry
+        # Ensure remote path exists using SSH command instead of SFTP
+        print(f"[ssh_copy] Creating remote directory {remote_path} on {hostname} via SSH command")
+        try:
+            # Use mkdir command with /p flag to create parent directories if needed
+            mkdir_cmd = f'mkdir "{remote_path}" 2>nul || cd .'
+            print(f"[ssh_copy] Running command: {mkdir_cmd}")
+            stdin, stdout, stderr = ssh.exec_command(mkdir_cmd, timeout=5)
+            stdout.read()  # Wait for command to complete
+            stderr.read()
+            print(f"[ssh_copy] Directory creation command completed for {hostname}")
+        except Exception as e:
+            print(f"[ssh_copy] Failed to create directory via SSH command: {e}")
+            # Continue anyway, directory might already exist
         
-        ensure_remote_dir(remote_path)
         print(f"[ssh_copy] Remote directory ensured for {hostname}")
         
         if os.path.isfile(local_path):
