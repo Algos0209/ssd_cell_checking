@@ -13,15 +13,20 @@ def ssh_copy(hostname, username, password, local_path, remote_path):
     :param remote_path: str, remote destination path
     :return: str, result message
     """
+    print(f"[ssh_copy] Starting copy to {hostname}")
     ssh = None
     sftp = None
     try:
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(hostname, username=username, password=password, timeout=10)
+        print(f"[ssh_copy] Connecting to {hostname}...")
+        ssh.connect(hostname, username=username, password=password, timeout=10, banner_timeout=10, auth_timeout=10)
+        print(f"[ssh_copy] Connected to {hostname}, opening SFTP...")
         sftp = ssh.open_sftp()
+        print(f"[ssh_copy] SFTP opened for {hostname}")
         
         # Ensure remote path exists
+        print(f"[ssh_copy] Creating remote directory {remote_path} on {hostname}")
         def ensure_remote_dir(path):
             dirs = []
             while path and path != '/':
@@ -38,14 +43,18 @@ def ssh_copy(hostname, username, password, local_path, remote_path):
                         pass  # May fail if parent doesn't exist, will retry
         
         ensure_remote_dir(remote_path)
+        print(f"[ssh_copy] Remote directory ensured for {hostname}")
         
         if os.path.isfile(local_path):
             # Copy single file
+            print(f"[ssh_copy] Copying single file to {hostname}")
             remote_file = os.path.join(remote_path, os.path.basename(local_path))
             sftp.put(local_path, remote_file)
             result = f'File copied to {remote_file}'
+            print(f"[ssh_copy] File copy completed for {hostname}")
         elif os.path.isdir(local_path):
             # Recursively copy folder
+            print(f"[ssh_copy] Copying folder to {hostname}")
             def recursive_upload(local_dir, remote_dir):
                 try:
                     sftp.mkdir(remote_dir)
@@ -60,19 +69,25 @@ def ssh_copy(hostname, username, password, local_path, remote_path):
                         sftp.put(local_item, remote_item)
             recursive_upload(local_path, remote_path)
             result = f'Folder copied to {remote_path}'
+            print(f"[ssh_copy] Folder copy completed for {hostname}")
         else:
             result = 'Local path does not exist.'
+            print(f"[ssh_copy] Local path does not exist for {hostname}")
         return result
     except Exception as e:
+        print(f"[ssh_copy] Exception for {hostname}: {e}")
         return f'Copy failed: {e}'
     finally:
+        print(f"[ssh_copy] Cleanup for {hostname}")
         if sftp is not None:
             try:
                 sftp.close()
-            except Exception:
-                pass
+                print(f"[ssh_copy] SFTP closed for {hostname}")
+            except Exception as e:
+                print(f"[ssh_copy] Error closing SFTP for {hostname}: {e}")
         if ssh is not None:
             try:
                 ssh.close()
-            except Exception:
-                pass
+                print(f"[ssh_copy] SSH closed for {hostname}")
+            except Exception as e:
+                print(f"[ssh_copy] Error closing SSH for {hostname}: {e}")
