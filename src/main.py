@@ -16,6 +16,7 @@ from PyQt5.QtGui import (
 )
 
 from credentials_generator import generate_credentials
+from ssh_copy import ssh_copy
 
 
 class PingWorker(QThread):
@@ -31,7 +32,7 @@ class PingWorker(QThread):
         self._is_running = True
 
     def run(self):
-        from src.ping_utils import ping_host
+        from ping_utils import ping_host
         results = []
         completed = 0
         def ping_and_ssh(info):
@@ -47,6 +48,7 @@ class PingWorker(QThread):
                 pingable = False
             row['pingable'] = pingable
             if pingable:
+                ssh = None
                 try:
                     ssh = paramiko.SSHClient()
                     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -60,10 +62,15 @@ class PingWorker(QThread):
                             results.append(f'ERR: {cmd_err}')
                         else:
                             results.append(cmd_out)
-                    ssh.close()
                     row['cmd_result'] = '\n'.join(results)
                 except Exception as e:
                     row['cmd_result'] = f'SSH ERR: {e}'
+                finally:
+                    if ssh is not None:
+                        try:
+                            ssh.close()
+                        except Exception:
+                            pass
             else:
                 row['cmd_result'] = 'Unreachable'
             return row
@@ -112,6 +119,40 @@ def handle_radio_buttons(window):
 
 
 def handle_execute(window):
+    # Combo box logic for built-in command 'copy'
+    def on_command_changed():
+        cmd = window.command_combo.currentText().strip().lower()
+        if cmd == 'copy':
+            window.path_from_edit.show()
+            window.path_dest_edit.show()
+            window.browse.show()
+            window.file_folder.show()
+            window.label_7.show()
+            window.label_8.show()
+        else:
+            window.path_from_edit.hide()
+            window.path_dest_edit.hide()
+            window.browse.hide()
+            window.file_folder.hide()
+            window.label_7.hide()
+            window.label_8.hide()
+    window.command_combo.currentIndexChanged.connect(on_command_changed)
+    # Initial state
+    on_command_changed()
+
+    # Browse button logic
+    def on_browse():
+        option = window.file_folder.currentText().strip().lower() if hasattr(window, 'file_folder') else 'file'
+        if option == 'folder':
+            folder = QtWidgets.QFileDialog.getExistingDirectory(window, 'Select Folder')
+            if folder:
+                window.path_from_edit.setText(folder)
+        else:
+            file, _ = QtWidgets.QFileDialog.getOpenFileName(window, 'Select File')
+            if file:
+                window.path_from_edit.setText(file)
+    window.browse.clicked.connect(on_browse)
+
     # Connect the export button to export the table to CSV
     def on_export():
         model = window.result_table.model()
@@ -190,10 +231,14 @@ def handle_execute(window):
             show_error('No radio button selected!')
             return
 
-        # Get command to execute
-        cmd = window.cmd_prompt.text().strip()
-        if not cmd:
-            show_error('Command to execute cannot be empty!', [window.cmd_prompt])
+        combo_cmd = window.command_combo.currentText().strip().lower()
+        custom_cmd = window.cmd_prompt.text().strip()
+        do_builtin = combo_cmd == 'copy'
+        do_custom = bool(custom_cmd)
+
+        # If neither, error
+        if not do_builtin and not do_custom:
+            show_error('Please provide a built-in command, a custom command, or both!')
             return
 
         # Set up progress bar
@@ -201,36 +246,87 @@ def handle_execute(window):
         window.progressBar.setMaximum(len(host_infos))
         window.progressBar.setValue(0)
 
-        # Start ping worker thread
-        def update_progress(val):
-            window.progressBar.setValue(val)
+        results = []
+        # First: built-in (copy)
+        if do_builtin:
+            local_path = window.path_from_edit.text().strip() if hasattr(window, 'path_from_edit') else ''
+            remote_path = window.path_dest_edit.text().strip() if hasattr(window, 'path_dest_edit') else ''
+            if not local_path:
+                show_error('Source path cannot be empty!', [window.path_from_edit] if hasattr(window, 'path_from_edit') else None)
+                return
+            if not remote_path:
+                remote_path = r'C:\sthi'
+                if hasattr(window, 'path_dest_edit'):
+                    window.path_dest_edit.setText(remote_path)
+            for idx, info in enumerate(host_infos, 1):
+                copy_result = ssh_copy(info['hostname'], info['username'], info['password'], local_path, remote_path)
+                results.append({'hostname': info['hostname'], 'pingable': True, 'cmd_result': copy_result})
+                window.progressBar.setValue(idx)
 
-        def on_finished(results):
-            # Sort results: pingable True first, then hostname alphabetically
-            df = pd.DataFrame(results)
-            df['pingable'] = df['pingable'].astype(bool)
-            df = df.sort_values(by=['pingable', 'hostname'], ascending=[False, True])
+        # Second: custom command (if provided)
+        if do_custom:
+            # If we already have results from copy, append/merge custom command results
+            def run_custom_cmd(host_info, prev_result=None):
+                host = host_info['hostname']
+                username = host_info['username']
+                password = host_info['password']
+                ssh = None
+                try:
+                    ssh = paramiko.SSHClient()
+                    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+                    ssh.connect(host, username=username, password=password, timeout=5)
+                    cmds = [c.strip() for c in custom_cmd.split('&&') if c.strip()]
+                    cmd_results = []
+                    for cmd in cmds:
+                        stdin, stdout, stderr = ssh.exec_command(cmd)
+                        cmd_out = stdout.read().decode(errors='replace').strip()
+                        cmd_err = stderr.read().decode(errors='replace').strip()
+                        if cmd_err:
+                            cmd_results.append(f'ERR: {cmd_err}')
+                        else:
+                            cmd_results.append(cmd_out)
+                    return '\n'.join(cmd_results)
+                except Exception as e:
+                    return f'SSH ERR: {e}'
+                finally:
+                    if ssh is not None:
+                        try:
+                            ssh.close()
+                        except Exception:
+                            pass
 
-            # Display results in result_table
-            model = QStandardItemModel()
-            model.setHorizontalHeaderLabels(['hostname', 'pingable', 'cmd_result'])
-            for _, row in df.iterrows():
-                hostname_item = QStandardItem(str(row['hostname']))
-                pingable_item = QStandardItem('Yes' if row['pingable'] else 'No')
-                cmd_result_item = QStandardItem(str(row['cmd_result']))
-                model.appendRow([hostname_item, pingable_item, cmd_result_item])
-            window.result_table.setModel(model)
-            # Expand columns to fill the view
-            header = window.result_table.horizontalHeader()
-            header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)  # hostname
-            header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)  # pingable
-            header.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)  # cmd_result
-            window.progressBar.setValue(len(host_infos))
+            # If results already exist (from copy), merge custom cmd results
+            if results:
+                for idx, info in enumerate(host_infos):
+                    custom_result = run_custom_cmd(info)
+                    # Merge with previous result
+                    prev = results[idx]['cmd_result']
+                    results[idx]['cmd_result'] = f'{prev}\n---\n{custom_result}'
+                    window.progressBar.setValue(idx+1)
+            else:
+                for idx, info in enumerate(host_infos, 1):
+                    custom_result = run_custom_cmd(info)
+                    results.append({'hostname': info['hostname'], 'pingable': True, 'cmd_result': custom_result})
+                    window.progressBar.setValue(idx)
 
-        window.ping_worker = PingWorker(host_infos, cmd)
-        window.ping_worker.progress.connect(update_progress)
-        window.ping_worker.finished.connect(on_finished)
-        window.ping_worker.start()
+        # Display results in result_table
+        import pandas as pd
+        df = pd.DataFrame(results)
+        df = df.sort_values(by=['hostname'], ascending=[True])
+        model = QStandardItemModel()
+        model.setHorizontalHeaderLabels(['hostname', 'pingable', 'cmd_result'])
+        for _, row in df.iterrows():
+            hostname_item = QStandardItem(str(row['hostname']))
+            pingable_item = QStandardItem(str(row['pingable']))
+            cmd_result_item = QStandardItem(str(row['cmd_result']))
+            model.appendRow([hostname_item, pingable_item, cmd_result_item])
+        window.result_table.setModel(model)
+        header = window.result_table.horizontalHeader()
+        header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
+        window.progressBar.setValue(len(host_infos))
+        return
 
     window.execute.clicked.connect(on_execute)
 
@@ -241,6 +337,10 @@ def main():
     empty_model = QStandardItemModel()
     empty_model.setHorizontalHeaderLabels(['hostname', 'pingable', 'cmd_result'])
     window.result_table.setModel(empty_model)
+    header = window.result_table.horizontalHeader()
+    header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)  # hostname
+    header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)  # pingable
+    header.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)  # cmd_result
     setup_validators(window)
     handle_radio_buttons(window)
     handle_execute(window)

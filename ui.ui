@@ -127,7 +127,7 @@
     <property name="geometry">
      <rect>
       <x>10</x>
-      <y>90</y>
+      <y>130</y>
       <width>171</width>
       <height>21</height>
      </rect>
@@ -140,7 +140,7 @@
     <property name="geometry">
      <rect>
       <x>190</x>
-      <y>90</y>
+      <y>130</y>
       <width>521</width>
       <height>21</height>
      </rect>
@@ -150,9 +150,9 @@
     <property name="geometry">
      <rect>
       <x>10</x>
-      <y>170</y>
+      <y>210</y>
       <width>781</width>
-      <height>371</height>
+      <height>331</height>
      </rect>
     </property>
     <property name="showDropIndicator" stdset="0">
@@ -166,7 +166,7 @@
     <property name="geometry">
      <rect>
       <x>10</x>
-      <y>130</y>
+      <y>170</y>
       <width>41</width>
       <height>21</height>
      </rect>
@@ -179,7 +179,7 @@
     <property name="geometry">
      <rect>
       <x>720</x>
-      <y>90</y>
+      <y>130</y>
       <width>75</width>
       <height>23</height>
      </rect>
@@ -192,7 +192,7 @@
     <property name="geometry">
      <rect>
       <x>720</x>
-      <y>130</y>
+      <y>170</y>
       <width>75</width>
       <height>23</height>
      </rect>
@@ -240,13 +240,134 @@
     <property name="geometry">
      <rect>
       <x>630</x>
-      <y>130</y>
+      <y>170</y>
       <width>75</width>
       <height>23</height>
      </rect>
     </property>
     <property name="text">
      <string>Export</string>
+    </property>
+   </widget>
+   <widget class="QComboBox" name="command_combo">
+    <property name="geometry">
+     <rect>
+      <x>100</x>
+      <y>90</y>
+      <width>69</width>
+      <height>22</height>
+     </rect>
+    </property>
+    <property name="currentIndex">
+     <number>0</number>
+    </property>
+    <item>
+     <property name="text">
+      <string/>
+     </property>
+    </item>
+    <item>
+     <property name="text">
+      <string>copy</string>
+     </property>
+    </item>
+   </widget>
+   <widget class="QLabel" name="label_6">
+    <property name="geometry">
+     <rect>
+      <x>10</x>
+      <y>90</y>
+      <width>91</width>
+      <height>21</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>Built-in command:</string>
+    </property>
+   </widget>
+   <widget class="QPushButton" name="browse">
+    <property name="geometry">
+     <rect>
+      <x>520</x>
+      <y>90</y>
+      <width>75</width>
+      <height>23</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>Browse</string>
+    </property>
+   </widget>
+   <widget class="QLineEdit" name="path_from_edit">
+    <property name="geometry">
+     <rect>
+      <x>290</x>
+      <y>90</y>
+      <width>221</width>
+      <height>20</height>
+     </rect>
+    </property>
+   </widget>
+   <widget class="QComboBox" name="file_folder">
+    <property name="geometry">
+     <rect>
+      <x>180</x>
+      <y>90</y>
+      <width>69</width>
+      <height>22</height>
+     </rect>
+    </property>
+    <property name="currentIndex">
+     <number>0</number>
+    </property>
+    <item>
+     <property name="text">
+      <string>file</string>
+     </property>
+    </item>
+    <item>
+     <property name="text">
+      <string>folder</string>
+     </property>
+    </item>
+   </widget>
+   <widget class="QLabel" name="label_7">
+    <property name="geometry">
+     <rect>
+      <x>260</x>
+      <y>90</y>
+      <width>31</width>
+      <height>21</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>From</string>
+    </property>
+   </widget>
+   <widget class="QLineEdit" name="path_dest_edit">
+    <property name="geometry">
+     <rect>
+      <x>620</x>
+      <y>90</y>
+      <width>171</width>
+      <height>21</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string/>
+    </property>
+   </widget>
+   <widget class="QLabel" name="label_8">
+    <property name="geometry">
+     <rect>
+      <x>600</x>
+      <y>90</y>
+      <width>21</width>
+      <height>21</height>
+     </rect>
+    </property>
+    <property name="text">
+     <string>To</string>
     </property>
    </widget>
   </widget>
