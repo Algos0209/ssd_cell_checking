@@ -15,8 +15,9 @@ from PyQt5.QtGui import (
     QStandardItemModel,
 )
 
+from command_utils import BUILTIN_COMMANDS
 from credentials_generator import generate_credentials
-from ssh_copy import ssh_copy
+from ping_utils import ping_host
 
 
 class ExecutionWorker(QThread):
@@ -35,7 +36,6 @@ class ExecutionWorker(QThread):
     def run(self):
         print(f"[LOG] ExecutionWorker started for {len(self.host_infos)} hosts")
         print(f"[LOG] Mode - Builtin: {self.do_builtin}, Custom: {self.do_custom}")
-        from ping_utils import ping_host
         results = [None] * len(self.host_infos)
 
         def worker(idx, info):
@@ -61,14 +61,18 @@ class ExecutionWorker(QThread):
                 return idx, row
             
             # Step 2: Execute built-in command (copy) if requested
-            copy_result = None
             if self.do_builtin:
-                print(f"[LOG] [{idx+1}] Starting copy for {host} from '{self.local_path}' to '{self.remote_path}'")
+                print(f"[LOG] [{idx+1}] Executing built-in {self.builtin_cmd} command for {host}")
                 try:
-                    copy_result = ssh_copy(host, username, password, self.local_path, self.remote_path)
-                    print(f"[LOG] [{idx+1}] Copy completed for {host}: {copy_result}")
+                    command_func = BUILTIN_COMMANDS.get(self.builtin_cmd)
+                    if command_func:
+                        results = command_func(host, username, password, self.local_path, self.remote_path)
+                        print(f"[LOG] [{idx+1}] Built-in {self.builtin_cmd} command completed for {host}")
+                    else:
+                        results = f'Unknown built-in command: {self.builtin_cmd}'
+                        print(f"[LOG] [{idx+1}] Unknown built-in command for {host}")
                 except Exception as e:
-                    copy_result = f'Copy failed: {e}'
+                    results = f'Copy failed: {e}'
                     print(f"[LOG] [{idx+1}] Copy exception for {host}: {e}")
             
             # Step 3: Execute custom command if requested
@@ -106,9 +110,9 @@ class ExecutionWorker(QThread):
             
             # Combine results based on mode
             if self.do_builtin and self.do_custom:
-                row['cmd_result'] = f'{copy_result}\n---\n{custom_result}'
+                row['cmd_result'] = f'{results}\n---\n{custom_result}'
             elif self.do_builtin:
-                row['cmd_result'] = copy_result
+                row['cmd_result'] = results
             elif self.do_custom:
                 row['cmd_result'] = custom_result
             
@@ -162,6 +166,9 @@ def handle_execute(window):
     # Combo box logic for built-in command 'copy'
     def on_command_changed():
         cmd = window.command_combo.currentText().strip().lower()
+        window.path_from_edit.clear()
+        window.path_dest_edit.clear()
+        window.cmd_prompt.clear()
         if cmd == 'copy':
             window.path_from_edit.show()
             window.path_dest_edit.show()
@@ -275,7 +282,7 @@ def handle_execute(window):
 
         combo_cmd = window.command_combo.currentText().strip().lower()
         custom_cmd = window.cmd_prompt.text().strip()
-        do_builtin = combo_cmd == 'copy'
+        do_builtin = combo_cmd in BUILTIN_COMMANDS
         do_custom = bool(custom_cmd)
 
         # If neither, error
@@ -329,6 +336,7 @@ def handle_execute(window):
 
         print(f"[LOG] Creating ExecutionWorker with {len(host_infos)} hosts")
         window.execution_worker = ExecutionWorker(host_infos, do_builtin, do_custom, local_path, remote_path, custom_cmd)
+        window.execution_worker.builtin_cmd = combo_cmd
         window.execution_worker.progress.connect(update_progress)
         window.execution_worker.finished.connect(on_finished)
         print("[LOG] Starting ExecutionWorker thread")
