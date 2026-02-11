@@ -18,6 +18,7 @@ from PyQt5.QtGui import (
 from command_utils import BUILTIN_COMMANDS
 from credentials_generator import generate_credentials
 from ping_utils import ping_host
+from scan_utils import export_scan_to_csv, scan_host
 
 
 class ExecutionWorker(QThread):
@@ -72,8 +73,8 @@ class ExecutionWorker(QThread):
                         results = f'Unknown built-in command: {self.builtin_cmd}'
                         print(f"[LOG] [{idx+1}] Unknown built-in command for {host}")
                 except Exception as e:
-                    results = f'Copy failed: {e}'
-                    print(f"[LOG] [{idx+1}] Copy exception for {host}: {e}")
+                    results = f'Execute failed: {e}'
+                    print(f"[LOG] [{idx+1}] Execute exception for {host}: {e}")
             
             # Step 3: Execute custom command if requested
             custom_result = None
@@ -131,6 +132,43 @@ class ExecutionWorker(QThread):
                 self.progress.emit(i)
 
         print(f"[LOG] All workers completed, emitting finished signal")
+        self.finished.emit(results)
+
+
+class ScanWorker(QThread):
+    progress = pyqtSignal(int)
+    finished = pyqtSignal(list)
+
+    def __init__(self, host_infos, parent=None):
+        super().__init__(parent)
+        self.host_infos = host_infos
+
+    def run(self):
+        print(f"[LOG] ScanWorker started for {len(self.host_infos)} hosts")
+        results = [None] * len(self.host_infos)
+
+        def worker(idx, info):
+            host = info['hostname']
+            username = info['username']
+            password = info['password']
+            print(f"[LOG] [{idx+1}/{len(self.host_infos)}] Scanning {host}...")
+            
+            result = scan_host(host, username, password)
+            print(f"[LOG] [{idx+1}] Scan completed for {host}")
+            return idx, result
+
+        # Run all workers in parallel with ThreadPoolExecutor
+        print(f"[LOG] Starting ThreadPoolExecutor for scan with 30 workers")
+        with ThreadPoolExecutor(max_workers=30) as executor:
+            futures = [executor.submit(worker, idx, info) for idx, info in enumerate(self.host_infos)]
+            print(f"[LOG] Submitted {len(futures)} scan tasks to executor")
+            for i, future in enumerate(as_completed(futures), 1):
+                idx, result = future.result()
+                results[idx] = result
+                print(f"[LOG] Scan progress: {i}/{len(self.host_infos)} completed")
+                self.progress.emit(i)
+
+        print(f"[LOG] All scan workers completed, emitting finished signal")
         self.finished.emit(results)
 
 
@@ -345,6 +383,111 @@ def handle_execute(window):
 
     window.execute.clicked.connect(on_execute)
 
+
+def handle_scan(window):
+    def show_error(message, clear_fields=None):
+        QtWidgets.QMessageBox.critical(window, 'Input Error', message)
+        if clear_fields:
+            for field in clear_fields:
+                field.clear()
+
+    def on_scan():
+        print("[LOG] Scan button clicked")
+        # Clear the result table immediately
+        empty_model = QStandardItemModel()
+        empty_model.setHorizontalHeaderLabels(['hostname', 'pingable', 'scan_result'])
+        window.result_table.setModel(empty_model)
+        
+        host_infos = []
+        if window.range_radio.isChecked():
+            print("[LOG] Range radio selected for scan")
+            from_text = window.range_from.text().strip()
+            to_text = window.range_to.text().strip()
+            clear = []
+            if not from_text:
+                clear.append(window.range_from)
+            if not to_text:
+                clear.append(window.range_to)
+            if clear:
+                show_error('Range fields cannot be empty!', clear)
+                return
+            start = int(from_text)
+            end = int(to_text)
+            if start > end:
+                show_error('From value must be less than or equal to To value!', [window.range_from, window.range_to])
+                return
+            for n in range(start, end + 1):
+                hostname, username, password = generate_credentials(n)
+                host_infos.append({'hostname': hostname, 'username': username, 'password': password})
+        elif window.list_radio.isChecked():
+            list_text = window.list_edit.text().strip()
+            if not list_text:
+                show_error('List field cannot be empty!', [window.list_edit])
+                return
+            items = [item.strip() for item in list_text.split(',') if item.strip()]
+            if not items:
+                show_error('List must contain at least one number!', [window.list_edit])
+                return
+            for item in items:
+                hostname, username, password = generate_credentials(item)
+                host_infos.append({'hostname': hostname, 'username': username, 'password': password})
+        else:
+            show_error('No radio button selected!')
+            return
+
+        # Set up progress bar
+        window.progressBar.setMinimum(0)
+        window.progressBar.setMaximum(len(host_infos))
+        window.progressBar.setValue(0)
+
+        # Create and start the scan worker thread
+        def update_progress(val):
+            print(f"[LOG] Scan progress update: {val}/{len(host_infos)}")
+            window.progressBar.setValue(val)
+
+        def on_finished(results):
+            print(f"[LOG] Scan finished, displaying {len(results)} results")
+            
+            # Automatically export to CSV
+            csv_path = export_scan_to_csv(results)
+            if csv_path:
+                print(f"[LOG] Scan results exported to {csv_path}")
+                QtWidgets.QMessageBox.information(window, 'Scan Complete', 
+                                                 f'Scan complete! Results saved to:\n{csv_path}')
+            else:
+                print("[LOG] Failed to export scan results to CSV")
+                QtWidgets.QMessageBox.warning(window, 'Export Warning', 
+                                             'Scan complete but failed to save CSV file.')
+            
+            # Display results in result_table
+            df = pd.DataFrame(results)
+            df = df.sort_values(by=['pingable', 'hostname'], ascending=[False, True])
+            model = QStandardItemModel()
+            model.setHorizontalHeaderLabels(['hostname', 'pingable', 'scan_result'])
+            for _, row in df.iterrows():
+                hostname_item = QStandardItem(str(row['hostname']))
+                pingable_item = QStandardItem('Yes' if row['pingable'] else 'No')
+                scan_result_item = QStandardItem(str(row['scan_result']))
+                model.appendRow([hostname_item, pingable_item, scan_result_item])
+            window.result_table.setModel(model)
+            header = window.result_table.horizontalHeader()
+            header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
+            header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
+            header.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
+            window.progressBar.setValue(len(host_infos))
+            print("[LOG] Scan results displayed in table")
+
+        print(f"[LOG] Creating ScanWorker with {len(host_infos)} hosts")
+        window.scan_worker = ScanWorker(host_infos)
+        window.scan_worker.progress.connect(update_progress)
+        window.scan_worker.finished.connect(on_finished)
+        print("[LOG] Starting ScanWorker thread")
+        window.scan_worker.start()
+        print("[LOG] ScanWorker thread started, returning from on_scan")
+
+    window.execute_2.clicked.connect(on_scan)
+
+
 def main():
     app = QtWidgets.QApplication(sys.argv)
     window = uic.loadUi("ui.ui")
@@ -359,6 +502,7 @@ def main():
     setup_validators(window)
     handle_radio_buttons(window)
     handle_execute(window)
+    handle_scan(window)
     window.show()
     sys.exit(app.exec_())
 
