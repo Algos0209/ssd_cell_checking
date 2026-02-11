@@ -300,8 +300,9 @@ def handle_execute(window):
                 show_error('From value must be less than or equal to To value!', [window.range_from, window.range_to])
                 return
             for n in range(start, end + 1):
-                hostname, username, password = generate_credentials(n)
-                host_infos.append({'hostname': hostname, 'username': username, 'password': password})
+                creds_list = generate_credentials(n)
+                for hostname, username, password in creds_list:
+                    host_infos.append({'hostname': hostname, 'username': username, 'password': password})
         elif window.list_radio.isChecked():
             list_text = window.list_edit.text().strip()
             if not list_text:
@@ -312,8 +313,9 @@ def handle_execute(window):
                 show_error('List must contain at least one number!', [window.list_edit])
                 return
             for item in items:
-                hostname, username, password = generate_credentials(item)
-                host_infos.append({'hostname': hostname, 'username': username, 'password': password})
+                creds_list = generate_credentials(item)
+                for hostname, username, password in creds_list:
+                    host_infos.append({'hostname': hostname, 'username': username, 'password': password})
         else:
             show_error('No radio button selected!')
             return
@@ -417,8 +419,9 @@ def handle_scan(window):
                 show_error('From value must be less than or equal to To value!', [window.range_from, window.range_to])
                 return
             for n in range(start, end + 1):
-                hostname, username, password = generate_credentials(n)
-                host_infos.append({'hostname': hostname, 'username': username, 'password': password})
+                creds_list = generate_credentials(n)
+                for hostname, username, password in creds_list:
+                    host_infos.append({'hostname': hostname, 'username': username, 'password': password})
         elif window.list_radio.isChecked():
             list_text = window.list_edit.text().strip()
             if not list_text:
@@ -429,8 +432,9 @@ def handle_scan(window):
                 show_error('List must contain at least one number!', [window.list_edit])
                 return
             for item in items:
-                hostname, username, password = generate_credentials(item)
-                host_infos.append({'hostname': hostname, 'username': username, 'password': password})
+                creds_list = generate_credentials(item)
+                for hostname, username, password in creds_list:
+                    host_infos.append({'hostname': hostname, 'username': username, 'password': password})
         else:
             show_error('No radio button selected!')
             return
